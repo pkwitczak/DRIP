@@ -221,3 +221,23 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+
+# Secret config files
+settings.env
+
+# Other environmetal files
+.env.*
+!.env.example
+
+# Compiled Micropython
+*.mpy
+
+# CI reports
+/test-results.xml
+
+
+# IDE local files
+.idea/
+.DS_Store
+Thumbs.db
