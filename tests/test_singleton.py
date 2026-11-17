@@ -1,4 +1,4 @@
-from singleton import singleton
+from app.singleton import singleton
 
 
 def test_singleton_returns_same_instance():

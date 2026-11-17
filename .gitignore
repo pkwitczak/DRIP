@@ -224,7 +224,7 @@ __marimo__/
 
 
 # Secret config files
-settings.env
+core_settings.env
 
 # Other environmetal files
 .env.*

@@ -27,7 +27,7 @@ def valve_class(monkeypatch):
     machine.Pin = FakePin
     monkeypatch.setitem(sys.modules, "machine", machine)
 
-    path = Path(__file__).resolve().parents[1] / "src" / "valves.py"
+    path = Path(__file__).resolve().parents[1] / "src" / "app" / "valves.py"
     spec = importlib.util.spec_from_file_location(
         "valves_under_test",
         path,

@@ -10,7 +10,7 @@ import pytest
 def parser_module(monkeypatch):
     monkeypatch.setitem(sys.modules, "ujson", json)
 
-    path = Path(__file__).resolve().parents[1] / "src" / "parser.py"
+    path = Path(__file__).resolve().parents[1] / "src" / "app" / "parser.py"
     spec = importlib.util.spec_from_file_location(
         "parser_under_test",
         path,

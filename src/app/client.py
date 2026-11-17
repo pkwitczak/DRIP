@@ -11,7 +11,7 @@ import ubinascii as binascii
 import urandom as random
 import ssl as ussl
 
-from protocol import Websocket, urlparse
+from app.protocol import Websocket, urlparse
 
 LOGGER = logging.getLogger(__name__)
 

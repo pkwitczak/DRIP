@@ -1,5 +1,5 @@
-from env_reader import env
-from version import VERSION as LOCAL_VERSION
+from app.env_reader import env
+from app.version import VERSION as LOCAL_VERSION
 
 class Config:
     def __init__(self, env_reader):
