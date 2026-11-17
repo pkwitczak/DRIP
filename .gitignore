@@ -234,8 +234,8 @@ settings.env
 *.mpy
 
 # CI reports
+/test-results.txt
 /test-results.xml
-
 
 # IDE local files
 .idea/

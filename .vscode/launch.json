@@ -1,0 +1,28 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "DRIP: Run tests → report file",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/tools/run_tests.py",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "noDebug": true
+    },
+    {
+      "name": "DRIP: Debug tests",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "pytest",
+      "args": [
+        "-v",
+        "--tb=long",
+        "--color=no"
+      ],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": true
+    }
+  ]
+}

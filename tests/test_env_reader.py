@@ -1,13 +1,14 @@
 import importlib
-
 import pytest
-
 import env_reader
 
 
+
 @pytest.fixture
-def env_class():
+def env_class(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
     module = importlib.reload(env_reader)
+
     return module.EnvFile
 
 
@@ -79,3 +80,10 @@ def test_context_closes_file_on_exception(env_class, tmp_path):
 
     assert opened_file.closed
     assert settings._file is None
+
+def test_env_reader_is_singleton(env_class):
+    first = env_class()
+    second = env_class()
+
+    assert first is second
+    assert first is env_reader.env
