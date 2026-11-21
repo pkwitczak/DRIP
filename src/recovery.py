@@ -1,171 +1,354 @@
-import os
+"""OTA release selection, journal and recovery."""
+
 try:
     import ujson as json
-    import uhashlib as hashlib
-    import ubinascii as binascii
 except ImportError:
     import json
+
+try:
+    import uhashlib as hashlib
+except ImportError:
     import hashlib
+
+try:
+    import ubinascii as binascii
+except ImportError:
     import binascii
+
+from storage import (
+    exists,
+    mkdirs,
+    read_text,
+    remove_tree,
+    sync,
+    write_text,
+)
+
 
 SLOTS = ("a", "b")
 
-def exists(path):
-    try:
-        os.stat(path)
-        return True
-    except OSError as exc:
-        if exc.args[0] == 2:
-            return False
-        raise
+PHASE_STABLE = "stable"
+PHASE_READY = "ready"
+PHASE_TRIAL = "trial"
 
-def sync():
-    fn = getattr(os, "sync", None)
-    if fn:
-        fn()
+MAX_RECORD_SIZE = 4096
 
-def mkdirs(path):
-    current = ""
-    for part in path.split("/"):
-        if part:
-            current += "/" + part
-            if not exists(current):
-                os.mkdir(current)
-
-def remove_tree(path, heartbeat=lambda: None):
-    if not exists(path):
-        return
-    heartbeat()
-    if os.stat(path)[0] & 0x4000:
-        for name in os.listdir(path):
-            remove_tree(path + "/" + name, heartbeat)
-        os.rmdir(path)
-    else:
-        os.remove(path)
 
 def sha256(data):
-    return binascii.hexlify(hashlib.sha256(data).digest()).decode()
+    return binascii.hexlify(
+        hashlib.sha256(data).digest()
+    ).decode()
+
+
+class _RecoveryState:
+    def __init__(
+        self,
+        sequence,
+        current,
+        phase=PHASE_STABLE,
+        candidate=None,
+        version=None,
+        candidate_version=None,
+        rejected=None,
+    ):
+        self.sequence = sequence
+        self.current = current
+        self.phase = phase
+        self.candidate = candidate
+        self.version = version
+        self.candidate_version = candidate_version
+        self.rejected = rejected
+
+        self.validate()
+
+    def validate(self):
+        if (
+            type(self.sequence) is not int
+            or self.sequence < 0
+        ):
+            raise ValueError(
+                "Invalid recovery sequence"
+            )
+
+        if self.current not in SLOTS:
+            raise ValueError(
+                "Invalid current slot"
+            )
+
+        if self.phase not in (
+            PHASE_STABLE,
+            PHASE_READY,
+            PHASE_TRIAL,
+        ):
+            raise ValueError(
+                "Invalid recovery phase"
+            )
+
+        if self.phase == PHASE_STABLE:
+            if self.candidate is not None:
+                raise ValueError(
+                    "Stable state cannot contain a candidate"
+                )
+
+        elif (
+            self.candidate not in SLOTS
+            or self.candidate == self.current
+        ):
+            raise ValueError(
+                "Pending state requires a separate candidate slot"
+            )
+
+    @classmethod
+    def from_record(cls, record):
+        if not isinstance(record, dict):
+            raise ValueError(
+                "Recovery state must be an object"
+            )
+
+        return cls(
+            sequence=record.get("seq"),
+            current=record.get("active"),
+            phase=record.get("phase"),
+            candidate=record.get("candidate"),
+            version=record.get("version"),
+            candidate_version=record.get(
+                "candidate_version"
+            ),
+            rejected=record.get("rejected"),
+        )
+
+    def to_record(self):
+        return {
+            "seq": self.sequence,
+            "active": self.current,
+            "phase": self.phase,
+            "candidate": self.candidate,
+            "version": self.version,
+            "candidate_version": self.candidate_version,
+            "rejected": self.rejected,
+        }
+
 
 class Recovery:
-    def __init__(self, base="/.ota", heartbeat=lambda: None):
+    def __init__(
+        self,
+        base="/.ota",
+        heartbeat=lambda: None,
+    ):
         self.base = base
         self.heartbeat = heartbeat
+
         mkdirs(base)
 
     def slot_path(self, slot):
         if slot not in SLOTS:
             raise ValueError("Invalid slot")
+
         return self.base + "/" + slot
 
-    @staticmethod
-    def _validate(s):
-        if type(s.get("seq")) is not int or s["seq"] < 0:
-            raise ValueError("Invalid sequence")
-        if s.get("active") not in SLOTS:
-            raise ValueError("Invalid active slot")
-        if s.get("phase") not in ("stable", "ready", "trial"):
-            raise ValueError("Invalid phase")
-        if s["phase"] == "stable":
-            if s.get("candidate") is not None:
-                raise ValueError("Unexpected candidate")
-        elif s.get("candidate") not in SLOTS or s["candidate"] == s["active"]:
-            raise ValueError("Invalid candidate")
+    def _record_path(self, number):
+        return self.base + "/state%d.json" % number
 
-    def read(self):
-        valid = []
+    def _read_state(self):
+        latest = None
+
         for number in (0, 1):
-            path = self.base + "/state%d.json" % number
+            path = self._record_path(number)
+
             if not exists(path):
                 continue
+
+            raw = read_text(
+                path,
+                MAX_RECORD_SIZE + 1,
+            )
+
+            if len(raw) > MAX_RECORD_SIZE:
+                continue
+
             try:
-                with open(path) as f:
-                    raw = f.read(4097)
-                if len(raw) > 4096:
-                    continue
                 record = json.loads(raw)
                 payload = record["payload"]
-                if sha256(payload.encode()) != record["sha256"]:
+
+                if (
+                    sha256(payload.encode())
+                    != record["sha256"]
+                ):
                     continue
-                state = json.loads(payload)
-                self._validate(state)
-                valid.append(state)
-            except (ValueError, KeyError, TypeError, AttributeError):
+
+                state = _RecoveryState.from_record(
+                    json.loads(payload)
+                )
+
+            except (
+                ValueError,
+                KeyError,
+                TypeError,
+                AttributeError,
+            ):
                 continue
-        if not valid:
-            raise RuntimeError("No valid recovery state; USB recovery required")
-        return max(valid, key=lambda s: s["seq"])
+
+            if (
+                latest is None
+                or state.sequence > latest.sequence
+            ):
+                latest = state
+
+        if latest is None:
+            raise RuntimeError(
+                "No valid recovery state; USB recovery required"
+            )
+
+        return latest
+
+    def read(self):
+        return self._read_state().to_record()
 
     def _write(self, state):
-        self._validate(state)
-        payload = json.dumps(state)
-        record = {"payload": payload, "sha256": sha256(payload.encode())}
-        path = self.base + "/state%d.json" % (state["seq"] % 2)
-        self.heartbeat()
-        with open(path, "w") as f:
-            json.dump(record, f)
-            f.flush()
-        sync()
+        state.validate()
+
+        payload = json.dumps(
+            state.to_record()
+        )
+
+        record = json.dumps({
+            "payload": payload,
+            "sha256": sha256(payload.encode()),
+        })
+
+        if len(record) > MAX_RECORD_SIZE:
+            raise ValueError(
+                "Recovery record exceeds size limit"
+            )
+
+        path = self._record_path(
+            state.sequence % 2
+        )
+
         self.heartbeat()
 
-    def _change(self, state, **updates):
-        new = dict(state)
-        new.update(updates)
-        new["seq"] = state["seq"] + 1
-        self._write(new)
-        return new
+        write_text(path, record)
+        sync()
+
+        self.heartbeat()
+
+    def _commit(self, state):
+        state.sequence += 1
+        self._write(state)
 
     def initialize(self, version="usb-initial"):
-        if any(exists(self.base + "/state%d.json" % n) for n in (0, 1)):
-            raise RuntimeError("Already initialized")
-        if not exists(self.slot_path("a") + "/ota.py"):
-            raise RuntimeError("Initial slot not installed")
-        self._write({"seq": 0, "phase": "stable", "active": "a",
-                     "candidate": None, "version": version,
-                     "candidate_version": None, "rejected": None})
+        if any(
+            exists(self._record_path(number))
+            for number in (0, 1)
+        ):
+            raise RuntimeError(
+                "Already initialized"
+            )
+
+        if not exists(
+            self.slot_path("a") + "/ota.py"
+        ):
+            raise RuntimeError(
+                "Initial slot not installed"
+            )
+
+        self._write(
+            _RecoveryState(
+                sequence=0,
+                current="a",
+                version=version,
+            )
+        )
 
     def cleanup(self):
-        state = self.read()
-        if state["phase"] != "stable":
-            raise RuntimeError("Refusing cleanup during pending trial")
-        other = "b" if state["active"] == "a" else "a"
-        remove_tree(self.slot_path(other), self.heartbeat)
+        state = self._read_state()
+
+        if state.phase != PHASE_STABLE:
+            raise RuntimeError(
+                "Refusing cleanup during pending trial"
+            )
+
+        inactive = next(
+            slot
+            for slot in SLOTS
+            if slot != state.current
+        )
+
+        remove_tree(
+            self.slot_path(inactive),
+            self.heartbeat,
+        )
+
         sync()
 
     def select(self):
-        state = self.read()
-        if state["phase"] == "trial":
+        state = self._read_state()
+
+        if state.phase == PHASE_TRIAL:
             self.rollback()
-            state = self.read()
-        if state["phase"] == "stable":
+            state = self._read_state()
+
+        if state.phase == PHASE_STABLE:
             self.cleanup()
-            return state["active"], False
-        candidate = state["candidate"]
-        # Journal the trial BEFORE importing any candidate Python module.
-        self._change(state, phase="trial")
-        return candidate, True
+            return state.current, False
+
+        # Persist the trial before importing candidate code.
+        state.phase = PHASE_TRIAL
+        self._commit(state)
+
+        return state.candidate, True
 
     def stage(self, target, version):
-        state = self.read()
-        if state["phase"] != "stable" or target == state["active"]:
-            raise RuntimeError("Cannot stage candidate")
+        state = self._read_state()
+
+        if (
+            state.phase != PHASE_STABLE
+            or target == state.current
+        ):
+            raise RuntimeError(
+                "Cannot stage candidate"
+            )
+
         self.slot_path(target)
-        self._change(state, phase="ready", candidate=target,
-                     candidate_version=version)
+
+        state.phase = PHASE_READY
+        state.candidate = target
+        state.candidate_version = version
+
+        self._commit(state)
 
     def confirm(self, slot):
-        state = self.read()
-        if state["phase"] != "trial" or state["candidate"] != slot:
-            raise RuntimeError("No matching trial")
-        # Only commit here; main performs cleanup in a separate try/except.
-        self._change(state, phase="stable", active=slot,
-                     version=state["candidate_version"], candidate=None,
-                     candidate_version=None, rejected=None)
+        state = self._read_state()
+
+        if (
+            state.phase != PHASE_TRIAL
+            or state.candidate != slot
+        ):
+            raise RuntimeError(
+                "No matching trial"
+            )
+
+        state.current = state.candidate
+        state.version = state.candidate_version
+        state.phase = PHASE_STABLE
+        state.candidate = None
+        state.candidate_version = None
+        state.rejected = None
+
+        # Commit only. Cleanup is a separate operation.
+        self._commit(state)
 
     def rollback(self):
-        state = self.read()
-        if state["phase"] not in ("ready", "trial"):
+        state = self._read_state()
+
+        if state.phase == PHASE_STABLE:
             return False
-        self._change(state, phase="stable", candidate=None,
-                     rejected=state.get("candidate_version"),
-                     candidate_version=None)
+
+        state.phase = PHASE_STABLE
+        state.rejected = state.candidate_version
+        state.candidate = None
+        state.candidate_version = None
+
+        self._commit(state)
+
         return True

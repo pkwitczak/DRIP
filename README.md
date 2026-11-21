@@ -2,44 +2,6 @@
 
 A MicroPython irrigation controller for Raspberry Pi Pico W / Pico 2 W.
 
-## Project Structure
-
-```text
-.
-├── .devcontainer/
-│   └── devcontainer.json   # Codespaces environment
-├── .github/
-│   └── workflows/
-│       └── ci.yml          # Syntax checks and tests
-├── src/
-│   ├── main.py             # Application entry point
-│   ├── config.py           # Application configuration
-│   ├── env_file.py         # Settings file loader
-│   ├── net.py              # Wi-Fi connection
-│   ├── ota.py              # OTA update manager (work in progress)
-│   ├── valves.py           # Valve control
-│   ├── led.py              # Status LED
-│   ├── client.py           # WebSocket connection and handshake
-│   ├── protocol.py         # WebSocket framing and message handling
-│   ├── parser.py           # Data parsers
-│   ├── singleton.py        # Shared singleton decorator
-│   ├── version.py          # Application version
-│   └── settings.env.example
-├── tests/
-│   ├── test_env_file.py
-│   ├── test_parser.py
-│   ├── test_singleton.py
-│   └── test_valves.py
-├── .gitattributes
-├── .gitignore
-├── pyproject.toml
-├── requirements-dev.txt
-└── README.md
-```
-
-The WebSocket implementation uses `client.py` together with `protocol.py`.
-The alternative `websocket_client.py` has been removed.
-
 ## Configuration
 
 Create your local settings file:
